@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/build/">
+    <Project Path="build/Cake.csproj" />
+  </Folder>
+  <Folder Name="/Solution Files/">
+    <File Path="README.md" />
+    <File Path=".editorconfig" />
+    <File Path="global.json" />
+    <File Path="Directory.Packages.props" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/NomDePlume/NomDePlume.csproj" />
+  </Folder>
+</Solution>
