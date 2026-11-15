@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 
 using NomDePlume.Capi;
 
@@ -52,6 +53,31 @@ public union SnkFile(SnkPublicKeyFile, CapiRsaPrivateKeyBlob)
         SnkPublicKeyFile pub => pub.FileBytes,
         CapiRsaPrivateKeyBlob pk => CapiPrivateKeyToPublicKeyFile(pk)
     };
+
+    public ReadOnlyMemory<byte> GetPublicKeyToken()
+    {
+        Span<byte> hash = stackalloc byte[20];
+        SHA1.HashData(ToEcmaPublicKeyBytes().Span, hash);
+
+        byte[] token = [.. hash[^8..]];
+        Array.Reverse(token);
+
+        return token;
+    }
+
+    public RSAParameters ToRSAParameters() => this switch
+    {
+        SnkPublicKeyFile file => file.ToRSAParameters(),
+        CapiRsaPrivateKeyBlob pk => pk.ToRSAParameters()
+    };
+
+
+    public CapiRsaPublicKeyBlob ToCapiPublicKeyBlob() => this switch
+    {
+        SnkPublicKeyFile pub => pub.PublicKey,
+        CapiRsaPrivateKeyBlob pk => pk.GetPublicKey()
+    };
+
 
     private static ReadOnlyMemory<byte> CapiPrivateKeyToPublicKeyFile(CapiRsaPrivateKeyBlob privateKeyBlob)
     {

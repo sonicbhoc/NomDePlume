@@ -17,7 +17,7 @@ public enum KeyHashAlgorithm : uint
 
 public struct SnkPublicKeyFileHeader
 {
-    public  KeySigningAlgorithm KeySigningAlgorithm { get; internal set; }
-    public  KeyHashAlgorithm KeyHashAlgorithm { get; internal set; }
-    public  uint PublicKeySize  { get; internal set; }
+    public KeySigningAlgorithm KeySigningAlgorithm { get; internal set; }
+    public KeyHashAlgorithm KeyHashAlgorithm { get; internal set; }
+    public uint PublicKeySize { get; internal set; }
 }

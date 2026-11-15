@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 
 using NomDePlume.Capi;
 
@@ -8,9 +9,9 @@ namespace NomDePlume.StrongNamingKey;
 public readonly struct SnkPublicKeyFile(ReadOnlyMemory<byte> fileBytes)
 {
     private static readonly int WrapperSize = Unsafe.SizeOf<SnkPublicKeyFileHeader>();
-    
+
     internal ReadOnlyMemory<byte> FileBytes { get; } = Validate(fileBytes);
-    
+
     public ref readonly SnkPublicKeyFileHeader FileHeader
         => ref MemoryMarshal.AsRef<SnkPublicKeyFileHeader>(FileBytes.Span);
 
@@ -23,7 +24,7 @@ public readonly struct SnkPublicKeyFile(ReadOnlyMemory<byte> fileBytes)
         {
             throw new FormatException($"Expected at least {WrapperSize} bytes; got {fileBytes.Length}.");
         }
-        
+
         ref readonly SnkPublicKeyFileHeader header =
             ref MemoryMarshal.AsRef<SnkPublicKeyFileHeader>(fileBytes.Span);
 
@@ -47,7 +48,7 @@ public readonly struct SnkPublicKeyFile(ReadOnlyMemory<byte> fileBytes)
             throw new FormatException(
                 $"Public key file is truncated. Expected at least {fileLength}; got {fileBytes.Length}.");
         }
-        
+
         CapiRsaPublicKeyBlob pk = new(fileBytes.Slice(WrapperSize, payloadLength));
 
         if (pk.BlobHeader.KeySigningAlgorithm != header.KeySigningAlgorithm)
@@ -58,4 +59,6 @@ public readonly struct SnkPublicKeyFile(ReadOnlyMemory<byte> fileBytes)
 
         return fileBytes;
     }
+
+    public RSAParameters ToRSAParameters() => PublicKey.ToRSAParameters();
 }
