@@ -161,7 +161,7 @@ csharp_new_line_before_open_brace = all
 csharp_new_line_between_query_expression_clauses = true
 csharp_wrap_before_binary_opsign = true
 csharp_wrap_before_eq = true
-csharp_wrap_before_comma = true
+csharp_wrap_before_comma = false
 csharp_wrap_before_ternary_opsigns = true
 csharp_wrap_before_arrow_with_expressions = true
 

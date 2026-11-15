@@ -1,17 +1,17 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace NomDePlume.StrongNameKey;
+namespace NomDePlume.Capi;
 
-public readonly struct SnkKeyPairBlob(ReadOnlyMemory<byte> pkBlob) : IEquatable<SnkKeyPairBlob>
+public readonly struct CapiRsaPublicKeyBlob(ReadOnlyMemory<byte> pkBlob) : IEquatable<CapiRsaPublicKeyBlob>
 {
     private const int BlobHeaderOffset = 0;
     private static readonly int RsaHeaderOffset = Unsafe.SizeOf<BlobHeader>();
     private static readonly int DataOffset = RsaHeaderOffset + Unsafe.SizeOf<RsaPubKeyHeader>();
     
-    private readonly ReadOnlyMemory<byte> _pkBlob = Validate(pkBlob);
+    internal ReadOnlyMemory<byte> PkBlob { get; } = Validate(pkBlob);
     
-    public ReadOnlySpan<byte> Span => _pkBlob.Span;
+    public ReadOnlySpan<byte> Span => PkBlob.Span;
     
     public bool IsEmpty => Span.Length == 0;
     public int Length => Span.Length;
@@ -22,17 +22,10 @@ public readonly struct SnkKeyPairBlob(ReadOnlyMemory<byte> pkBlob) : IEquatable<
     public ref readonly RsaPubKeyHeader RsaPubKeyHeader => ref MemoryMarshal.AsRef<RsaPubKeyHeader>(Span[RsaHeaderOffset..]);
 
     private int FullLengthField => (int)(RsaPubKeyHeader.BitLength >> 3);
-    private int HalfLengthField => (int)(RsaPubKeyHeader.BitLength >> 4);
 
-    public ReadOnlySpan<byte> Modulus => Span[DataOffset..FullLengthField];
-    public ReadOnlySpan<byte> Prime1 => Span[(DataOffset + FullLengthField)..HalfLengthField];
-    public ReadOnlySpan<byte> Prime2 => Span[(DataOffset + FullLengthField + HalfLengthField)..HalfLengthField];
-    public ReadOnlySpan<byte> Exponent1 => Span[(DataOffset + FullLengthField + HalfLengthField * 2)..HalfLengthField];
-    public ReadOnlySpan<byte> Exponent2 => Span[(DataOffset + FullLengthField + HalfLengthField * 3)..HalfLengthField];
-    public ReadOnlySpan<byte> Coefficient => Span[(DataOffset + FullLengthField + HalfLengthField * 4)..HalfLengthField];
-    public ReadOnlySpan<byte> PrivateExponent => Span[(DataOffset + FullLengthField + HalfLengthField * 5)..FullLengthField];
+    public ReadOnlySpan<byte> Modulus => Span.Slice(DataOffset, FullLengthField);
     
-    public bool Equals(SnkKeyPairBlob other)
+    public bool Equals(CapiRsaPublicKeyBlob other)
     {
         return Span.SequenceEqual(other.Span);
     }
@@ -41,7 +34,7 @@ public readonly struct SnkKeyPairBlob(ReadOnlyMemory<byte> pkBlob) : IEquatable<
     {
         return other switch
         {
-            SnkKeyPairBlob otherBlob => Equals(otherBlob),
+            CapiRsaPublicKeyBlob otherBlob => Equals(otherBlob),
             _ => false
         };
     }
@@ -53,7 +46,7 @@ public readonly struct SnkKeyPairBlob(ReadOnlyMemory<byte> pkBlob) : IEquatable<
         return hash.ToHashCode();
     }
 
-    private static ReadOnlyMemory<byte> Validate(ReadOnlyMemory<byte> pkBlob)
+    internal static ReadOnlyMemory<byte> Validate(ReadOnlyMemory<byte> pkBlob)
     {
         if (pkBlob.Length < DataOffset)
         {
@@ -64,9 +57,9 @@ public readonly struct SnkKeyPairBlob(ReadOnlyMemory<byte> pkBlob) : IEquatable<
         ref readonly BlobHeader header = ref MemoryMarshal.AsRef<BlobHeader>(span[BlobHeaderOffset..]);
         ref readonly RsaPubKeyHeader rsaKey = ref MemoryMarshal.AsRef<RsaPubKeyHeader>(span[RsaHeaderOffset..]);
 
-        if (header.BlobType != BlobType.PRIVATEKEYBLOB || rsaKey.RsaMagic != RsaMagic.RSA2)
+        if (header.BlobType != BlobType.PUBLICKEYBLOB || rsaKey.RsaMagic != RsaMagic.RSA1)
         {
-            throw new FormatException($"Private key blob must be a private key type {BlobType.PRIVATEKEYBLOB}; given {header.BlobType}. Magic value must be {RsaMagic.RSA2}; given {rsaKey.RsaMagic}.");
+            throw new FormatException($"Private key blob must be a private key type {BlobType.PUBLICKEYBLOB}; given {header.BlobType}. Magic value must be {RsaMagic.RSA2}; given {rsaKey.RsaMagic}.");
         }
 
         if (rsaKey.BitLength == 0 || rsaKey.BitLength % 16 != 0)
@@ -75,14 +68,13 @@ public readonly struct SnkKeyPairBlob(ReadOnlyMemory<byte> pkBlob) : IEquatable<
         }
         
         int fullLengthField = (int)(rsaKey.BitLength >> 3);
-        int halfLengthField = (int)(rsaKey.BitLength >> 4);
-        int expectedLength = checked(DataOffset + (fullLengthField * 2) + (halfLengthField * 5));
+        int expectedLength = checked(DataOffset + fullLengthField);
 
         return pkBlob.Length < expectedLength
             ? throw new FormatException($"Private key blob truncated. Expected {expectedLength} bytes long, got {pkBlob.Length}.")
             : pkBlob;
     }
     
-    public static bool operator ==(SnkKeyPairBlob left, SnkKeyPairBlob right) => left.Equals(right);
-    public static bool operator !=(SnkKeyPairBlob left, SnkKeyPairBlob right) => !left.Equals(right);
+    public static bool operator ==(CapiRsaPublicKeyBlob left, CapiRsaPublicKeyBlob right) => left.Equals(right);
+    public static bool operator !=(CapiRsaPublicKeyBlob left, CapiRsaPublicKeyBlob right) => !left.Equals(right);
 }
