@@ -15,10 +15,12 @@
     <WarningsAsErrors>true</WarningsAsErrors>
     <PackageTags>$(PackageTags);Assembly;Signing;Strong-name;Strong-naming;SN;Tool</PackageTags>
     <ToolCommandName>plume</ToolCommandName>
+    <Features>runtime-async=on</Features>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="DotMake.CommandLine" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="Microsoft.SourceLink.GitHub" />
