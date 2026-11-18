@@ -7,7 +7,7 @@ using System.Security.Cryptography;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using NomDePlume.Capi;
 using NomDePlume.Commands;
-using NomDePlume.StrongNaming;
+using NomDePlume.SignatureVerification;
 using NomDePlume.StrongNamingKey;
 
 namespace NomDePlume.Tests;
@@ -30,10 +30,13 @@ public sealed class StrongNameSignatureVerifierTests
                 peReader.PEHeaders.CorHeader!.StrongNameSignatureDirectory,
                 HashAlgorithmName.SHA1);
             CollectionAssert.AreEqual(signingHash, computedHash);
+            StrongNameHashData reusableHash = new StrongNameHasher().ComputePeStrongNameHash(peReader).Data;
+            CollectionAssert.AreEqual(signingHash, reusableHash.Hash);
+            Assert.AreEqual(HashAlgorithmName.SHA1, reusableHash.AlgorithmName);
 
             var verifier = new StrongNameSignatureVerifier();
 
-            Assert.AreEqual(StrongNameSignatureVerificationResult.Valid, verifier.Verify(signedAssembly));
+            Assert.IsTrue(verifier.Verify(signedAssembly) is StrongNameSignatureValid);
         }
         finally
         {
@@ -50,7 +53,7 @@ public sealed class StrongNameSignatureVerifierTests
         {
             var verifier = new StrongNameSignatureVerifier();
 
-            Assert.AreEqual(StrongNameSignatureVerificationResult.Valid, verifier.Verify(signedAssembly));
+            Assert.IsTrue(verifier.Verify(signedAssembly) is StrongNameSignatureValid);
         }
         finally
         {
@@ -70,9 +73,7 @@ public sealed class StrongNameSignatureVerifierTests
             File.WriteAllBytes(tamperedAssembly, image);
 
             var verifier = new StrongNameSignatureVerifier();
-            Assert.AreEqual(
-                StrongNameSignatureVerificationResult.Invalid,
-                verifier.Verify(tamperedAssembly, force: true));
+            Assert.IsTrue(verifier.Verify(tamperedAssembly, force: true) is StrongNameSignatureInvalid);
         }
         finally
         {
@@ -95,9 +96,7 @@ public sealed class StrongNameSignatureVerifierTests
             File.WriteAllBytes(signedAssembly, image);
 
             var verifier = new StrongNameSignatureVerifier();
-            Assert.AreEqual(
-                StrongNameSignatureVerificationResult.Invalid,
-                verifier.Verify(signedAssembly, force: true));
+            Assert.IsTrue(verifier.Verify(signedAssembly, force: true) is StrongNameSignatureInvalid);
         }
         finally
         {
@@ -125,7 +124,7 @@ public sealed class StrongNameSignatureVerifierTests
             File.WriteAllBytes(signedAssembly, image);
 
             var verifier = new StrongNameSignatureVerifier();
-            Assert.AreEqual(StrongNameSignatureVerificationResult.Valid, verifier.Verify(signedAssembly));
+            Assert.IsTrue(verifier.Verify(signedAssembly) is StrongNameSignatureValid);
         }
         finally
         {
@@ -141,12 +140,8 @@ public sealed class StrongNameSignatureVerifierTests
 
         try
         {
-            Assert.AreEqual(
-                StrongNameSignatureVerificationResult.Skipped,
-                verifier.Verify(signedAssembly));
-            Assert.AreEqual(
-                StrongNameSignatureVerificationResult.Valid,
-                verifier.Verify(signedAssembly, force: true));
+            Assert.IsTrue(verifier.Verify(signedAssembly) is StrongNameVerificationSkipped);
+            Assert.IsTrue(verifier.Verify(signedAssembly, force: true) is StrongNameSignatureValid);
         }
         finally
         {
@@ -157,8 +152,8 @@ public sealed class StrongNameSignatureVerifierTests
     [TestMethod]
     public void ForceOption_IsHiddenOnlyWhenNotRunningOnWindows()
     {
-        var nonWindowsParser = NomDePlumeRootCommand.CreateParser(isWindows: false);
-        var windowsParser = NomDePlumeRootCommand.CreateParser(isWindows: true);
+        var nonWindowsParser = Plume.CreateParser(isWindows: false);
+        var windowsParser = Plume.CreateParser(isWindows: true);
 
         Assert.IsTrue(GetForceOption(nonWindowsParser.RootCommand.Subcommands.Single()).Hidden);
         Assert.IsFalse(GetForceOption(windowsParser.RootCommand.Subcommands.Single()).Hidden);

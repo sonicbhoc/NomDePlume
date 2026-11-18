@@ -1,6 +1,6 @@
 using Microsoft.Win32;
 
-namespace NomDePlume.StrongNaming;
+namespace NomDePlume.SignatureVerification;
 
 public sealed class WindowsRegistryStrongNameVerificationSkipList : IStrongNameVerificationSkipList
 {

@@ -1,42 +1,51 @@
 using DotMake.CommandLine;
 using NomDePlume;
-using NomDePlume.StrongNaming;
+using NomDePlume.SignatureVerification;
 
 namespace NomDePlume.Commands;
 
-[CliCommand(Name = "verify", Description = "Verifies an assembly's strong-name signature.")]
+[CliCommand(
+    Parent = typeof(Plume),
+    Name = "verify",
+    Description = "Verify an assembly's strong-name signature.")]
 public class AssemblyVerificationCommand
 {
-    [CliArgument(Description = "The assembly to verify.", Required = true)]
-    public FilePath Assembly { get; set; }
+    [CliArgument(
+        Required = true,
+        ValidationRules = CliValidationRules.LegalPath | CliValidationRules.ExistingFile,
+        Description = "Path to a valid .NET assembly file")]
+    public FilePath AssemblyPath { get; set; }
 
-    [CliOption(Alias = "-f", Description = "Force signature verification even when Windows registry policy skips it.", Hidden = true)]
+    [CliOption(
+        Alias = "-f",
+        Description = "Force signature verification even when Windows registry policy skips it.",
+        Hidden = true)]
     public bool Force { get; set; }
 
     public int Run()
     {
-        if (!File.Exists(Assembly.Value))
+        if (!File.Exists(AssemblyPath.Value))
         {
-            Console.Error.WriteLine($"Assembly file not found: {Assembly.Value}");
+            Console.Error.WriteLine($"Assembly file not found: {AssemblyPath.Value}");
             return 1;
         }
 
-        StrongNameSignatureVerificationResult result =
-            new StrongNameSignatureVerifier().Verify(Assembly.Value, Force);
-
-        if (result == StrongNameSignatureVerificationResult.Invalid)
+        IStrongNameSignatureVerifier verifier = new StrongNameSignatureVerifier();
+        SignatureVerificationResult result = verifier.VerifyAssemblyStrongNaming(AssemblyPath, Force);
+        switch (result)
         {
-            Console.Error.WriteLine($"Failed to verify assembly -- Strong name validation failed: {Assembly.Value}");
-            return 1;
+            case StrongNameSignatureValid:
+                Console.WriteLine($"{AssemblyPath.Value} is valid.");
+                return 0;
+            case StrongNameVerificationSkipped:
+                Console.WriteLine(
+                    $"Strong-name verification skipped by Windows registry policy: {AssemblyPath.Value}");
+                return 0;
+            default:
+                Console.Error.WriteLine(
+                    $"Failed to verify assembly -- Strong name validation failed: {AssemblyPath.Value}");
+                return 1;
         }
 
-        if (result == StrongNameSignatureVerificationResult.Skipped)
-        {
-            Console.WriteLine($"Strong-name verification skipped by Windows registry policy: {Assembly.Value}");
-            return 0;
-        }
-
-        Console.WriteLine($"{Assembly.Value} is valid.");
-        return 0;
     }
 }

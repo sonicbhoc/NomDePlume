@@ -1,4 +1,4 @@
-namespace NomDePlume.StrongNaming;
+namespace NomDePlume.SignatureVerification;
 
 public interface IStrongNameVerificationSkipList
 {

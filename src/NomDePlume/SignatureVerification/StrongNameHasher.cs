@@ -1,15 +1,69 @@
+using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
+using NomDePlume.StrongNamingKey;
 
-namespace NomDePlume.StrongNaming;
+namespace NomDePlume.SignatureVerification;
 
-public static class StrongNameHasher
+public sealed class StrongNameHasher : IStrongNameHasher
 {
     private const int ChecksumOffsetInOptionalHeader = 64;
     private const int Pe32DataDirectoriesOffset = 96;
     private const int Pe32PlusDataDirectoriesOffset = 112;
     private const int SecurityDirectoryIndex = 4;
     private const int DataDirectoryEntrySize = 8;
+
+    public StrongNameHashComputationResult ComputePeStrongNameHash(PEReader peReader)
+    {
+        ArgumentNullException.ThrowIfNull(peReader);
+
+        if (!peReader.HasMetadata)
+        {
+            throw new BadImageFormatException("The image does not contain assembly metadata.");
+        }
+
+        MetadataReader metadataReader = peReader.GetMetadataReader();
+        if (!metadataReader.IsAssembly)
+        {
+            throw new BadImageFormatException("The image does not contain an assembly.");
+        }
+
+        AssemblyDefinition assembly = metadataReader.GetAssemblyDefinition();
+        byte[] publicKeyBytes = metadataReader.GetBlobBytes(assembly.PublicKey);
+        if (publicKeyBytes.Length == 0)
+        {
+            throw new BadImageFormatException("The assembly does not contain a strong-name public key.");
+        }
+
+        SnkPublicKeyFile publicKey = new(publicKeyBytes);
+        HashAlgorithmName hashAlgorithm = publicKey.FileHeader.KeyHashAlgorithm switch
+        {
+            KeyHashAlgorithm.DEFAULT or KeyHashAlgorithm.CALG_SHA1 => HashAlgorithmName.SHA1,
+            KeyHashAlgorithm.CALG_SHA_256 => HashAlgorithmName.SHA256,
+            _ => throw new FormatException(
+                $"Unsupported strong-name hash algorithm: {publicKey.FileHeader.KeyHashAlgorithm}.")
+        };
+
+        CorHeader corHeader = peReader.PEHeaders.CorHeader
+            ?? throw new BadImageFormatException("The image does not contain a COR header.");
+        DirectoryEntry signatureDirectory = corHeader.StrongNameSignatureDirectory;
+        if (signatureDirectory.Size <= 0
+            || !peReader.PEHeaders.TryGetDirectoryOffset(signatureDirectory, out int signatureOffset))
+        {
+            throw new BadImageFormatException("The image does not contain a valid strong-name signature directory.");
+        }
+
+        byte[] image = peReader.GetEntireImage().GetContent().ToArray();
+        int signatureLength = checked((int)signatureDirectory.Size);
+        if (signatureOffset < 0 || signatureLength > image.Length - signatureOffset)
+        {
+            throw new BadImageFormatException("The strong-name signature directory is outside the PE image.");
+        }
+
+        byte[] hash = ComputeHash(image, peReader.PEHeaders, signatureDirectory, hashAlgorithm);
+        return new StrongNameHashComputationResult(
+            new StrongNameHashData(hash, hashAlgorithm, signatureOffset, signatureLength));
+    }
 
     public static byte[] ComputeHash(
         ReadOnlyMemory<byte> image,

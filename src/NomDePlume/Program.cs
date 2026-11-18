@@ -1,5 +1,5 @@
 using DotMake.CommandLine;
 using NomDePlume.Commands;
 
-CliParser parser = NomDePlumeRootCommand.CreateParser(OperatingSystem.IsWindows());
+CliParser parser = Plume.CreateParser(OperatingSystem.IsWindows());
 return parser.Run(args);

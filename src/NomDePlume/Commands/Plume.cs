@@ -1,14 +1,15 @@
-using System.CommandLine;
 using DotMake.CommandLine;
+using System.CommandLine;
 
 namespace NomDePlume.Commands;
 
-[CliCommand(Children = new[] { typeof(AssemblyVerificationCommand) })]
-public class NomDePlumeRootCommand
+[CliCommand(
+    Description = "Nom de Plume is a cross-platform utility for signing and inspecting .NET assemblies with Strong Naming Keys.")]
+public class Plume
 {
     public static CliParser CreateParser(bool isWindows)
     {
-        CliParser parser = Cli.GetParser<NomDePlumeRootCommand>();
+        CliParser parser = Cli.GetParser<Plume>();
         Command verificationCommand = parser.RootCommand.Subcommands
             .Single(command => command.Name == "verify");
         Option forceOption = verificationCommand.Options
