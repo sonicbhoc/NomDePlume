@@ -1,6 +1,6 @@
 namespace NomDePlume.Commands;
 
-public class PublicKeyTokenCommand
+public sealed class PublicKeyTokenCommand
 {
 
 }

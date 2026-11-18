@@ -5,6 +5,7 @@
     <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishAot>true</PublishAot>
     <RunAOTCompilation>true</RunAOTCompilation>
     <StripSymbols>true</StripSymbols>
@@ -15,6 +16,7 @@
     <WarningsAsErrors>true</WarningsAsErrors>
     <PackageTags>$(PackageTags);Assembly;Signing;Strong-name;Strong-naming;SN;Tool</PackageTags>
     <ToolCommandName>plume</ToolCommandName>
+    <Features>runtime-async=on</Features>
   </PropertyGroup>
 
   <ItemGroup>

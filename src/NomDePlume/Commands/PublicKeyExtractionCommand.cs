@@ -1,6 +1,6 @@
 namespace NomDePlume.Commands;
 
-public class PublicKeyExtractionCommand
+public sealed class PublicKeyExtractionCommand
 {
 
 }

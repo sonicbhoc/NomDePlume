@@ -1,89 +1,139 @@
-using System.Reflection.PortableExecutable;
 using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using NomDePlume.StrongNamingKey;
 
 namespace NomDePlume.StrongNaming;
 
-public sealed class StrongNameSignatureVerifier
+public sealed class StrongNameSignatureVerifier(IStrongNameVerificationSkipList skipList)
+    : IStrongNameSignatureVerifier
 {
-    private readonly IStrongNameVerificationSkipList skipList;
-
-    public StrongNameSignatureVerifier(IStrongNameVerificationSkipList? skipList = null)
+    public async Task<StrongNameSignatureVerificationResult> VerifyAssemblyStrongNamingAsync(
+        FilePath assemblyPath,
+        bool force = false)
     {
-        this.skipList = skipList ?? new WindowsRegistryStrongNameVerificationSkipList();
-    }
+        ArgumentException.ThrowIfNullOrWhiteSpace(assemblyPath.Value);
 
-    public StrongNameSignatureVerificationResult Verify(string assemblyPath, bool force = false)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(assemblyPath);
-
-        using FileStream stream = File.OpenRead(assemblyPath);
-        using var peReader = new PEReader(stream, PEStreamOptions.PrefetchEntireImage);
-        if (!peReader.HasMetadata)
+        byte[] image;
+        try
         {
-            return StrongNameSignatureVerificationResult.Invalid;
+            image = await File.ReadAllBytesAsync(assemblyPath.Value).ConfigureAwait(false);
+        }
+        catch (FileNotFoundException)
+        {
+            return new AssemblyFileNotFound(assemblyPath);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new AssemblyFileNotFound(assemblyPath);
         }
 
-        MetadataReader metadataReader = peReader.GetMetadataReader();
-        if (!metadataReader.IsAssembly)
+        try
         {
-            return StrongNameSignatureVerificationResult.Invalid;
+            using var stream = new MemoryStream(image, writable: false);
+            using var peReader = new PEReader(stream, PEStreamOptions.PrefetchEntireImage);
+            if (!peReader.HasMetadata)
+            {
+                return new StrongNameHasherError(new PEHeaderEmpty(assemblyPath));
+            }
+
+            MetadataReader metadataReader = peReader.GetMetadataReader();
+            if (!metadataReader.IsAssembly)
+            {
+                return new StrongNameHasherError(new NotAnAssembly(assemblyPath));
+            }
+
+            AssemblyDefinition assembly = metadataReader.GetAssemblyDefinition();
+            byte[] publicKeyBytes = metadataReader.GetBlobBytes(assembly.PublicKey);
+            if (publicKeyBytes.Length == 0)
+            {
+                return new StrongNameHasherError(new StrongNamePublicKeyMissing(assemblyPath));
+            }
+
+            string assemblyName = metadataReader.GetString(assembly.Name);
+            if (!force)
+            {
+                string tokenString;
+                try
+                {
+                    tokenString = Convert.ToHexString(SnkFile.Parse(publicKeyBytes).GetPublicKeyToken().ToArray());
+                }
+                catch (FormatException exception)
+                {
+                    return new StrongNameHasherError(
+                        new InvalidStrongNamePublicKey(assemblyPath, exception.Message));
+                }
+                catch (ArgumentOutOfRangeException exception)
+                {
+                    return new StrongNameHasherError(
+                        new InvalidStrongNamePublicKey(assemblyPath, exception.Message));
+                }
+
+                if (skipList.IsVerificationSkipped(assemblyPath, assemblyName, tokenString))
+                {
+                    return new StrongNameVerificationSkipped(assemblyPath);
+                }
+            }
+
+            CorHeader? corHeader = peReader.PEHeaders.CorHeader;
+            if (corHeader is null)
+            {
+                return new StrongNameHasherError(new CorHeaderNotFound(assemblyPath));
+            }
+
+            if ((corHeader.Flags & CorFlags.StrongNameSigned) == 0)
+            {
+                return new CorStrongNameFlagUnset(assemblyPath);
+            }
+
+            StrongNameHashComputationResult hashResult =
+                StrongNameHasher.ComputePeStrongNameHash(peReader, assemblyPath);
+            if (hashResult.TryGetValue(out StrongNameHasherError hashingError))
+            {
+                return hashingError;
+            }
+
+            if (!hashResult.TryGetValue(out StrongNameHashData hashData))
+            {
+                throw new InvalidOperationException("The strong-name hasher returned an empty result.");
+            }
+
+            SnkPublicKeyFile publicKey;
+            try
+            {
+                publicKey = new SnkPublicKeyFile(publicKeyBytes);
+            }
+            catch (FormatException exception)
+            {
+                return new StrongNameHasherError(
+                    new InvalidStrongNamePublicKey(assemblyPath, exception.Message));
+            }
+            catch (ArgumentOutOfRangeException exception)
+            {
+                return new StrongNameHasherError(
+                    new InvalidStrongNamePublicKey(assemblyPath, exception.Message));
+            }
+
+            byte[] signature = image.AsSpan(hashData.SignatureOffset, hashData.SignatureLength).ToArray();
+            Array.Reverse(signature);
+
+            using RSA rsa = RSA.Create();
+            rsa.ImportParameters(publicKey.ToRSAParameters());
+            return rsa.VerifyHash(hashData.Hash, signature, hashData.AlgorithmName, RSASignaturePadding.Pkcs1)
+                ? new StrongNameSignatureValid(assemblyPath)
+                : new StrongNameSignatureInvalid(assemblyPath);
         }
-
-        AssemblyDefinition assembly = metadataReader.GetAssemblyDefinition();
-        byte[] publicKeyBytes = metadataReader.GetBlobBytes(assembly.PublicKey);
-        if (publicKeyBytes.Length == 0)
+        catch (BadImageFormatException exception)
         {
-            return StrongNameSignatureVerificationResult.Invalid;
+            return new StrongNameHasherError(new InvalidStrongNameImage(assemblyPath, exception.Message));
         }
-
-        var publicKeyFile = new SnkPublicKeyFile(publicKeyBytes);
-        byte[] publicKeyToken = SnkFile.Parse(publicKeyBytes).GetPublicKeyToken().ToArray();
-        string tokenString = Convert.ToHexString(publicKeyToken);
-        string assemblyName = metadataReader.GetString(assembly.Name);
-
-        if (!force && skipList.IsVerificationSkipped(assemblyPath, assemblyName, tokenString))
+        catch (OverflowException exception)
         {
-            return StrongNameSignatureVerificationResult.Skipped;
+            return new StrongNameHasherError(new InvalidStrongNameImage(assemblyPath, exception.Message));
         }
-
-        CorHeader? corHeader = peReader.PEHeaders.CorHeader;
-        if (corHeader is null
-            || (corHeader.Flags & CorFlags.StrongNameSigned) == 0
-            || corHeader.StrongNameSignatureDirectory.Size == 0
-            || !peReader.PEHeaders.TryGetDirectoryOffset(corHeader.StrongNameSignatureDirectory, out int signatureOffset))
+        catch (CryptographicException)
         {
-            return StrongNameSignatureVerificationResult.Invalid;
+            return new StrongNameSignatureInvalid(assemblyPath);
         }
-
-        byte[] image = peReader.GetEntireImage().GetContent().ToArray();
-        int signatureSize = checked((int)corHeader.StrongNameSignatureDirectory.Size);
-        if (signatureOffset < 0 || signatureSize > image.Length - signatureOffset)
-        {
-            throw new BadImageFormatException("The strong-name signature directory is outside the PE image.");
-        }
-
-        HashAlgorithmName hashAlgorithm = publicKeyFile.FileHeader.KeyHashAlgorithm switch
-        {
-            KeyHashAlgorithm.DEFAULT or KeyHashAlgorithm.CALG_SHA1 => HashAlgorithmName.SHA1,
-            KeyHashAlgorithm.CALG_SHA_256 => HashAlgorithmName.SHA256,
-            _ => throw new FormatException(
-                $"Unsupported strong-name hash algorithm: {publicKeyFile.FileHeader.KeyHashAlgorithm}.")
-        };
-
-        byte[] hash = StrongNameHasher.ComputeHash(
-            image,
-            peReader.PEHeaders,
-            corHeader.StrongNameSignatureDirectory,
-            hashAlgorithm);
-        byte[] signature = image.AsSpan(signatureOffset, signatureSize).ToArray();
-        Array.Reverse(signature);
-
-        using RSA rsa = RSA.Create();
-        rsa.ImportParameters(publicKeyFile.ToRSAParameters());
-        return rsa.VerifyHash(hash, signature, hashAlgorithm, RSASignaturePadding.Pkcs1)
-            ? StrongNameSignatureVerificationResult.Valid
-            : StrongNameSignatureVerificationResult.Invalid;
     }
 }

@@ -1,11 +1,19 @@
 using System.CommandLine;
 using DotMake.CommandLine;
+using Microsoft.Extensions.DependencyInjection;
+using NomDePlume.StrongNaming;
 
 namespace NomDePlume.Commands;
 
 [CliCommand(Children = new[] { typeof(AssemblyVerificationCommand) })]
-public class NomDePlumeRootCommand
+public sealed class NomDePlumeRootCommand
 {
+    public static void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton<IStrongNameVerificationSkipList, WindowsRegistryStrongNameVerificationSkipList>();
+        services.AddSingleton<IStrongNameSignatureVerifier, StrongNameSignatureVerifier>();
+    }
+
     public static CliParser CreateParser(bool isWindows)
     {
         CliParser parser = Cli.GetParser<NomDePlumeRootCommand>();

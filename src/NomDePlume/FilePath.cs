@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.IO;
 
 namespace NomDePlume;
 
@@ -17,6 +16,7 @@ public readonly record struct FilePath : ISpanParsable<FilePath>
         Value = result;
     }
 
+    // ReSharper disable once UnusedParameter.Local
     private FilePath(string normalizedPath, bool skipValidation) => Value = normalizedPath;
 
     public string FileName => Path.GetFileName(Value);
@@ -29,7 +29,7 @@ public readonly record struct FilePath : ISpanParsable<FilePath>
 
     public static FilePath Parse(string s, IFormatProvider? provider)
     {
-        ArgumentNullException.ThrowIfNull(s, nameof(s));
+        ArgumentNullException.ThrowIfNull(s);
 
         return TryParse(s, provider, out var result) ? result : throw new FormatException($"Invalid file path: {s}");
     }
