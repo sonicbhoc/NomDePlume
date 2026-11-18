@@ -4,5 +4,5 @@ namespace NomDePlume.SignatureVerification;
 
 public interface IStrongNameHasher
 {
-    StrongNameHashComputationResult ComputePeStrongNameHash(PEReader peReader);
+    StrongNameHashComputationResult ComputePeStrongNameHash(PEReader peReader, FilePath assemblyPath);
 }

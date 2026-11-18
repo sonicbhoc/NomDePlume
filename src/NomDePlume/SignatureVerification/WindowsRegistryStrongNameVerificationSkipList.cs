@@ -6,7 +6,7 @@ public sealed class WindowsRegistryStrongNameVerificationSkipList : IStrongNameV
 {
     private const string RegistryPath = @"SOFTWARE\Microsoft\StrongName\Verification";
 
-    public bool IsVerificationSkipped(string assemblyPath, string assemblyName, string publicKeyToken)
+    public bool IsVerificationSkipped(FilePath assemblyPath, string assemblyName, string publicKeyToken)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -21,6 +21,7 @@ public sealed class WindowsRegistryStrongNameVerificationSkipList : IStrongNameV
         {
             using RegistryKey baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, registryView);
             using RegistryKey? verificationKey = baseKey.OpenSubKey(RegistryPath);
+
             if (verificationKey is null)
             {
                 continue;
@@ -43,7 +44,7 @@ internal static class StrongNameVerificationSkipEntry
 {
     internal static bool Matches(
         string entry,
-        string assemblyPath,
+        FilePath assemblyPath,
         string assemblyName,
         string publicKeyToken)
     {
@@ -73,6 +74,6 @@ internal static class StrongNameVerificationSkipEntry
 
         string simpleName = registeredAssembly.Split(',', 2)[0].Trim();
         return simpleName.Equals(assemblyName, StringComparison.OrdinalIgnoreCase)
-            || registeredAssembly.Equals(assemblyPath, StringComparison.OrdinalIgnoreCase);
+            || registeredAssembly.Equals(assemblyPath.Value, StringComparison.OrdinalIgnoreCase);
     }
 }

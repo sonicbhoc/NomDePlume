@@ -1,6 +1,8 @@
+using System.Buffers.Binary;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
+
 using NomDePlume.StrongNamingKey;
 
 namespace NomDePlume.SignatureVerification;
@@ -13,144 +15,237 @@ public sealed class StrongNameHasher : IStrongNameHasher
     private const int SecurityDirectoryIndex = 4;
     private const int DataDirectoryEntrySize = 8;
 
-    public StrongNameHashComputationResult ComputePeStrongNameHash(PEReader peReader)
+    public unsafe StrongNameHashComputationResult ComputePeStrongNameHash(
+        PEReader peReader,
+        FilePath assemblyPath)
     {
         ArgumentNullException.ThrowIfNull(peReader);
 
-        if (!peReader.HasMetadata)
+        try
         {
-            throw new BadImageFormatException("The image does not contain assembly metadata.");
+            if (!peReader.HasMetadata)
+            {
+                return new StrongNameHasherError(new PEHeaderEmpty(assemblyPath));
+            }
+
+            MetadataReader metadataReader = peReader.GetMetadataReader();
+            if (!metadataReader.IsAssembly)
+            {
+                return new StrongNameHasherError(new NotAnAssembly(assemblyPath));
+            }
+
+            AssemblyDefinition assembly = metadataReader.GetAssemblyDefinition();
+            byte[] publicKeyBytes = metadataReader.GetBlobBytes(assembly.PublicKey);
+            if (publicKeyBytes.Length == 0)
+            {
+                return new StrongNameHasherError(new StrongNamePublicKeyMissing(assemblyPath));
+            }
+
+            if (publicKeyBytes.Length < sizeof(uint) * 3)
+            {
+                return new StrongNameHasherError(new InvalidStrongNamePublicKey(
+                    assemblyPath,
+                    $"Expected at least {sizeof(uint) * 3} bytes; got {publicKeyBytes.Length}."));
+            }
+
+            KeyHashAlgorithm keyHashAlgorithm = (KeyHashAlgorithm)BinaryPrimitives.ReadUInt32LittleEndian(
+                publicKeyBytes.AsSpan(sizeof(uint)));
+            HashAlgorithmName hashAlgorithm = keyHashAlgorithm switch
+            {
+                KeyHashAlgorithm.DEFAULT or KeyHashAlgorithm.CALG_SHA1 => HashAlgorithmName.SHA1,
+                KeyHashAlgorithm.CALG_SHA_256 => HashAlgorithmName.SHA256,
+                _ => default
+            };
+            if (string.IsNullOrEmpty(hashAlgorithm.Name))
+            {
+                return new StrongNameHasherError(new UnsupportedStrongNameHashAlgorithm(
+                    assemblyPath,
+                    $"Unsupported strong-name hash algorithm: {keyHashAlgorithm}."));
+            }
+
+            CorHeader? corHeader = peReader.PEHeaders.CorHeader;
+            if (corHeader is null)
+            {
+                return new StrongNameHasherError(new CorHeaderNotFound(assemblyPath));
+            }
+
+            DirectoryEntry signatureDirectory = corHeader.StrongNameSignatureDirectory;
+            if (signatureDirectory.Size <= 0
+                || !peReader.PEHeaders.TryGetDirectoryOffset(signatureDirectory, out int signatureOffset))
+            {
+                return new StrongNameHasherError(new InvalidStrongNameSignatureDirectory(
+                    assemblyPath,
+                    "The image does not contain a valid strong-name signature directory."));
+            }
+
+            if (!peReader.IsEntireImageAvailable)
+            {
+                return new StrongNameHasherError(new InvalidStrongNameImage(
+                    assemblyPath,
+                    "The entire PE image is not available for strong-name hashing."));
+            }
+
+            BlobReader imageReader = peReader.GetEntireImage().GetReader();
+            ReadOnlySpan<byte> image = new(imageReader.CurrentPointer, imageReader.Length);
+            int signatureLength = signatureDirectory.Size;
+            if (signatureOffset < 0 || signatureLength > image.Length - signatureOffset)
+            {
+                return new StrongNameHasherError(new InvalidStrongNameSignatureDirectory(
+                    assemblyPath,
+                    "The strong-name signature directory is outside the PE image."));
+            }
+
+            StrongNameHashComputationResult result =
+                ComputeHash(image, peReader.PEHeaders, signatureDirectory, hashAlgorithm, assemblyPath);
+            GC.KeepAlive(peReader); // The span points into memory owned by the PEReader.
+            return result;
         }
-
-        MetadataReader metadataReader = peReader.GetMetadataReader();
-        if (!metadataReader.IsAssembly)
+        catch (BadImageFormatException exception)
         {
-            throw new BadImageFormatException("The image does not contain an assembly.");
+            return new StrongNameHasherError(new InvalidStrongNameImage(assemblyPath, exception.Message));
         }
-
-        AssemblyDefinition assembly = metadataReader.GetAssemblyDefinition();
-        byte[] publicKeyBytes = metadataReader.GetBlobBytes(assembly.PublicKey);
-        if (publicKeyBytes.Length == 0)
+        catch (FormatException exception)
         {
-            throw new BadImageFormatException("The assembly does not contain a strong-name public key.");
+            return new StrongNameHasherError(new InvalidStrongNamePublicKey(assemblyPath, exception.Message));
         }
-
-        SnkPublicKeyFile publicKey = new(publicKeyBytes);
-        HashAlgorithmName hashAlgorithm = publicKey.FileHeader.KeyHashAlgorithm switch
+        catch (OverflowException exception)
         {
-            KeyHashAlgorithm.DEFAULT or KeyHashAlgorithm.CALG_SHA1 => HashAlgorithmName.SHA1,
-            KeyHashAlgorithm.CALG_SHA_256 => HashAlgorithmName.SHA256,
-            _ => throw new FormatException(
-                $"Unsupported strong-name hash algorithm: {publicKey.FileHeader.KeyHashAlgorithm}.")
-        };
-
-        CorHeader corHeader = peReader.PEHeaders.CorHeader
-            ?? throw new BadImageFormatException("The image does not contain a COR header.");
-        DirectoryEntry signatureDirectory = corHeader.StrongNameSignatureDirectory;
-        if (signatureDirectory.Size <= 0
-            || !peReader.PEHeaders.TryGetDirectoryOffset(signatureDirectory, out int signatureOffset))
-        {
-            throw new BadImageFormatException("The image does not contain a valid strong-name signature directory.");
+            return new StrongNameHasherError(new InvalidStrongNameImage(assemblyPath, exception.Message));
         }
-
-        byte[] image = peReader.GetEntireImage().GetContent().ToArray();
-        int signatureLength = checked((int)signatureDirectory.Size);
-        if (signatureOffset < 0 || signatureLength > image.Length - signatureOffset)
+        catch (ArgumentOutOfRangeException exception)
         {
-            throw new BadImageFormatException("The strong-name signature directory is outside the PE image.");
+            return new StrongNameHasherError(new InvalidStrongNamePublicKey(assemblyPath, exception.Message));
         }
-
-        byte[] hash = ComputeHash(image, peReader.PEHeaders, signatureDirectory, hashAlgorithm);
-        return new StrongNameHashComputationResult(
-            new StrongNameHashData(hash, hashAlgorithm, signatureOffset, signatureLength));
     }
 
-    public static byte[] ComputeHash(
-        ReadOnlyMemory<byte> image,
+    internal static StrongNameHashComputationResult ComputeHash(
+        ReadOnlySpan<byte> image,
         PEHeaders headers,
         DirectoryEntry strongNameSignatureDirectory,
-        HashAlgorithmName hashAlgorithm)
+        HashAlgorithmName hashAlgorithm,
+        FilePath assemblyPath)
     {
         ArgumentNullException.ThrowIfNull(headers);
-        ArgumentException.ThrowIfNullOrEmpty(hashAlgorithm.Name);
-
-        PEHeader peHeader = headers.PEHeader
-            ?? throw new BadImageFormatException("The image does not contain a PE header.");
-        int optionalHeaderOffset = checked(headers.CoffHeaderStartOffset + 20);
-        int unalignedHeaderSize = checked(
-            optionalHeaderOffset
-            + headers.CoffHeader.SizeOfOptionalHeader
-            + headers.CoffHeader.NumberOfSections * 40);
-        int alignedHeaderSize = checked((int)peHeader.SizeOfHeaders);
-        var hashRanges = new List<(int Offset, int Length, bool Zero)>
+        string algorithmName = hashAlgorithm.Name ?? string.Empty;
+        if (algorithmName.Length == 0)
         {
-            (checked(optionalHeaderOffset + ChecksumOffsetInOptionalHeader), sizeof(uint), true)
-        };
-
-        if (alignedHeaderSize < unalignedHeaderSize)
-        {
-            throw new BadImageFormatException("The PE headers extend beyond the declared headers size.");
+            return new StrongNameHasherError(
+                new UnsupportedStrongNameHashAlgorithm(assemblyPath, algorithmName));
         }
 
-        if (alignedHeaderSize > unalignedHeaderSize)
+        if (strongNameSignatureDirectory.Size < 0)
         {
-            hashRanges.Add((unalignedHeaderSize, alignedHeaderSize - unalignedHeaderSize, false));
+            return new StrongNameHasherError(new InvalidStrongNameSignatureDirectory(
+                assemblyPath,
+                "The strong-name signature directory has a negative size."));
         }
 
-        if (peHeader.NumberOfRvaAndSizes > SecurityDirectoryIndex)
+        try
         {
-            int dataDirectoriesOffset = peHeader.Magic == PEMagic.PE32
-                ? Pe32DataDirectoriesOffset
-                : Pe32PlusDataDirectoriesOffset;
-            int securityDirectoryOffset = checked(
-                optionalHeaderOffset + dataDirectoriesOffset + SecurityDirectoryIndex * DataDirectoryEntrySize);
-            hashRanges.Add((securityDirectoryOffset, DataDirectoryEntrySize, true));
-        }
-
-        if (strongNameSignatureDirectory.Size > 0)
-        {
-            if (!headers.TryGetDirectoryOffset(strongNameSignatureDirectory, out int signatureOffset))
+            PEHeader? peHeader = headers.PEHeader;
+            if (peHeader is null)
             {
-                throw new BadImageFormatException("The strong-name signature directory is outside the PE image.");
+                return new StrongNameHasherError(
+                    new InvalidStrongNameImage(assemblyPath, "The image does not contain a PE header."));
             }
 
-            hashRanges.Add((signatureOffset, checked((int)strongNameSignatureDirectory.Size), false));
+            int optionalHeaderOffset = checked(headers.CoffHeaderStartOffset + 20);
+            int unalignedHeaderSize = checked(
+                optionalHeaderOffset
+                + headers.CoffHeader.SizeOfOptionalHeader
+                + headers.CoffHeader.NumberOfSections * 40);
+            int alignedHeaderSize = peHeader.SizeOfHeaders;
+            var hashRanges = new List<(int Offset, int Length, bool Zero)>
+            {
+                (checked(optionalHeaderOffset + ChecksumOffsetInOptionalHeader), sizeof(uint), true)
+            };
+
+            if (alignedHeaderSize < unalignedHeaderSize)
+            {
+                return new StrongNameHasherError(new InvalidStrongNameImage(
+                    assemblyPath,
+                    "The PE headers extend beyond the declared headers size."));
+            }
+
+            if (alignedHeaderSize > unalignedHeaderSize)
+            {
+                hashRanges.Add((unalignedHeaderSize, alignedHeaderSize - unalignedHeaderSize, false));
+            }
+
+            if (peHeader.NumberOfRvaAndSizes > SecurityDirectoryIndex)
+            {
+                int dataDirectoriesOffset = peHeader.Magic == PEMagic.PE32
+                    ? Pe32DataDirectoriesOffset
+                    : Pe32PlusDataDirectoriesOffset;
+                int securityDirectoryOffset = checked(
+                    optionalHeaderOffset
+                    + dataDirectoriesOffset
+                    + SecurityDirectoryIndex * DataDirectoryEntrySize);
+                hashRanges.Add((securityDirectoryOffset, DataDirectoryEntrySize, true));
+            }
+
+            int signatureOffset = 0;
+            if (strongNameSignatureDirectory.Size > 0)
+            {
+                if (!headers.TryGetDirectoryOffset(strongNameSignatureDirectory, out signatureOffset))
+                {
+                    return new StrongNameHasherError(new InvalidStrongNameSignatureDirectory(
+                        assemblyPath,
+                        "The strong-name signature directory is outside the PE image."));
+                }
+
+                hashRanges.Add((signatureOffset, strongNameSignatureDirectory.Size, false));
+            }
+
+            hashRanges.Sort(static (left, right) => left.Offset.CompareTo(right.Offset));
+
+            using IncrementalHash hash = IncrementalHash.CreateHash(hashAlgorithm);
+            Span<byte> zeroBytes = stackalloc byte[DataDirectoryEntrySize];
+            zeroBytes.Clear();
+            int position = 0;
+
+            foreach ((int offset, int length, bool zero) in hashRanges)
+            {
+                int end = checked(offset + length);
+                if (offset < position || end > image.Length)
+                {
+                    return new StrongNameHasherError(new InvalidStrongNameImage(
+                        assemblyPath,
+                        "A PE hash range is outside the image."));
+                }
+
+                if (offset > position)
+                {
+                    hash.AppendData(image[position..offset]);
+                }
+
+                if (zero)
+                {
+                    hash.AppendData(zeroBytes[..length]);
+                }
+
+                position = Math.Max(position, end);
+            }
+
+            if (position < image.Length)
+            {
+                hash.AppendData(image[position..]);
+            }
+
+            return new StrongNameHashData(
+                hash.GetHashAndReset(),
+                hashAlgorithm,
+                signatureOffset,
+                strongNameSignatureDirectory.Size);
         }
-
-        hashRanges.Sort(static (left, right) => left.Offset.CompareTo(right.Offset));
-
-        using IncrementalHash hash = IncrementalHash.CreateHash(hashAlgorithm);
-        ReadOnlySpan<byte> imageSpan = image.Span;
-        Span<byte> zeroBytes = stackalloc byte[DataDirectoryEntrySize];
-        zeroBytes.Clear();
-        int position = 0;
-
-        foreach ((int offset, int length, bool zero) in hashRanges)
+        catch (OverflowException exception)
         {
-            int end = checked(offset + length);
-            if (offset < position || end > imageSpan.Length)
-            {
-                throw new BadImageFormatException("A PE hash range is outside the image.");
-            }
-
-            if (offset > position)
-            {
-                hash.AppendData(imageSpan[position..offset]);
-            }
-
-            if (zero)
-            {
-                hash.AppendData(zeroBytes[..length]);
-            }
-
-            position = Math.Max(position, end);
+            return new StrongNameHasherError(new InvalidStrongNameImage(assemblyPath, exception.Message));
         }
-
-        if (position < imageSpan.Length)
+        catch (CryptographicException)
         {
-            hash.AppendData(imageSpan[position..]);
+            return new StrongNameHasherError(
+                new UnsupportedStrongNameHashAlgorithm(assemblyPath, algorithmName));
         }
-
-        return hash.GetHashAndReset();
     }
 }

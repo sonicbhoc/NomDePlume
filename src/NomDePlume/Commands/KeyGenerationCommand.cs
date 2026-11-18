@@ -1,6 +1,6 @@
 namespace NomDePlume.Commands;
 
-public class KeyGenerationCommand
+public sealed class KeyGenerationCommand
 {
 
 }

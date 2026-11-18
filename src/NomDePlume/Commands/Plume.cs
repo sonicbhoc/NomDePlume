@@ -1,12 +1,24 @@
-using DotMake.CommandLine;
 using System.CommandLine;
+
+using DotMake.CommandLine;
+
+using Microsoft.Extensions.DependencyInjection;
+
+using NomDePlume.SignatureVerification;
 
 namespace NomDePlume.Commands;
 
 [CliCommand(
     Description = "Nom de Plume is a cross-platform utility for signing and inspecting .NET assemblies with Strong Naming Keys.")]
-public class Plume
+public sealed class Plume
 {
+    public static void ConfigureServices(IServiceCollection services)
+    {
+        services.AddSingleton<IStrongNameHasher, StrongNameHasher>();
+        services.AddSingleton<IStrongNameVerificationSkipList, WindowsRegistryStrongNameVerificationSkipList>();
+        services.AddSingleton<IStrongNameSignatureVerifier, StrongNameSignatureVerifier>();
+    }
+
     public static CliParser CreateParser(bool isWindows)
     {
         CliParser parser = Cli.GetParser<Plume>();
