@@ -1,6 +1,66 @@
+using DotMake.CommandLine;
+using NomDePlume.StrongNaming;
+
 namespace NomDePlume.Commands;
 
-public class AssemblyVerificationCommand
+[CliCommand(Name = "verify", Description = "Verifies an assembly's strong-name signature.")]
+public sealed class AssemblyVerificationCommand(IStrongNameSignatureVerifier verifier)
 {
+    [CliArgument(
+        Required = true,
+        ValidationRules = CliValidationRules.LegalPath,
+        Description = "The assembly to verify.")]
+    public FilePath Assembly { get; set; }
 
+    [CliOption(
+        Alias = "-f",
+        Description = "Force signature verification even when Windows registry policy skips it.",
+        Hidden = true)]
+    public bool Force { get; set; }
+
+    public async Task<int> RunAsync()
+    {
+        StrongNameSignatureVerificationResult result =
+            await verifier.VerifyAssemblyStrongNamingAsync(Assembly, Force).ConfigureAwait(false);
+        var failure = (
+            ExitCode: 1,
+            Message: $"Failed to verify assembly -- Strong name validation failed: {Assembly.Value}");
+        (int exitCode, string message) = result switch
+        {
+            StrongNameSignatureValid => (0, $"{Assembly.Value} is valid."),
+            StrongNameVerificationSkipped =>
+                (0, $"Strong-name verification skipped by Windows registry policy: {Assembly.Value}"),
+            AssemblyFileNotFound notFound => (1, $"Assembly file not found: {notFound.Path.Value}"),
+            CorStrongNameFlagUnset => failure,
+            StrongNameSignatureInvalid => failure,
+            StrongNameHasherError hasherError => (1, FormatError(hasherError))
+        };
+
+        if (exitCode == 0)
+        {
+            await Console.Out.WriteLineAsync(message);
+        }
+        else
+        {
+            await Console.Error.WriteLineAsync(message);
+        }
+
+        return exitCode;
+    }
+
+    private static string FormatError(StrongNameHasherError error) => error switch
+    {
+        PEHeaderEmpty missingMetadata => $"Assembly has no metadata: {missingMetadata.Path.Value}",
+        NotAnAssembly notAssembly => $"File is not a .NET assembly: {notAssembly.Path.Value}",
+        CorHeaderNotFound missingHeader => $"Assembly has no COR header: {missingHeader.Path.Value}",
+        StrongNamePublicKeyMissing missingKey => $"Assembly has no strong-name public key: {missingKey.Path.Value}",
+        UnsupportedStrongNameHashAlgorithm unsupported =>
+            $"Unsupported strong-name hash algorithm '{unsupported.Algorithm}': {unsupported.Path.Value}",
+        InvalidStrongNameSignatureDirectory invalidDirectory =>
+            $"Invalid strong-name signature directory for {invalidDirectory.Path.Value}: {invalidDirectory.Reason}",
+        InvalidStrongNamePublicKey invalidKey =>
+            $"Invalid strong-name public key for {invalidKey.Path.Value}: {invalidKey.Reason}",
+        InvalidStrongNameImage invalidImage =>
+            $"Invalid strong-name image {invalidImage.Path.Value}: {invalidImage.Reason}"
+    };
 }

@@ -11,4 +11,7 @@
   <Folder Name="/src/">
     <Project Path="src/NomDePlume/NomDePlume.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NomDePlume.Tests/NomDePlume.Tests.csproj" />
+  </Folder>
 </Solution>
